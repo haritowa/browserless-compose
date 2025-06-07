@@ -1,37 +1,46 @@
 version: "3.9"
 
-# Load environment variables from .env (make sure .env exists and contains ACME_EMAIL, BL_TOKEN, BL_HOST)
-env_file:
-  - .env
-
 networks:
   webproxy:
     driver: bridge
 
 services:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Traefik 3 – TLS termination, single router for /chrome WebSocket only
+  # ────────────────────────────────────────────────────────────────────────────
   proxy:
-    image: traefik:3.0
+    image: traefik:3 # always pulls the latest 3.x
+    env_file:
+      - .env # ACME_EMAIL loaded here
     command:
+      # Core providers / entrypoints
       - --providers.docker=true
       - --providers.docker.exposedByDefault=false
+
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
+
+      # Force HTTP → HTTPS
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
+
+      # ACME (Let’s Encrypt) – TLS-ALPN
       - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+
+      # Nice-to-haves
       - --log.level=INFO
       - --accesslog=true
       - --accesslog.filepath=/traefik-logs/access.log
-      # If you want to expose the Traefik dashboard, uncomment the following labels
-      # - --api.dashboard=true
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # ACME cert storage (chmod 600 ./letsencrypt/acme.json)
       - ./letsencrypt:/letsencrypt
+      # Access logs (optional)
       - ./traefik-logs:/traefik-logs
     healthcheck:
       test: ["CMD", "traefik", "healthcheck"]
@@ -40,48 +49,41 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    networks:
-      - webproxy
+    networks: [webproxy]
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # Browserless (v2 latest) – exposed only via Traefik router above
+  # ────────────────────────────────────────────────────────────────────────────
   browserless:
     image: ghcr.io/browserless/chrome:latest
-    depends_on:
-      - proxy
+    env_file:
+      - .env # BL_TOKEN loaded here
+    depends_on: [proxy]
     environment:
-      # REQUIRED: your token to authenticate to Browserless
+      # Required auth
       - TOKEN=${BL_TOKEN}
-      # Maximum concurrent Chrome sessions
-      - CONCURRENT=7
-      # How many jobs to queue before rejecting
+      # Typical tuning (safe defaults – tweak if needed)
+      - CONCURRENT=4
       - QUEUED=100
-      # Time (ms) before a session times out
       - TIMEOUT=300000
-      # Let Browserless ignore HTTPS errors
       - IGNORE_HTTPS_ERRORS=true
-      # Chrome launch flags
       - LAUNCH_ARGS=--disable-dev-shm-usage --no-sandbox
-      # Pre‐boot one Chrome instance on startup for faster first requests
-      - PREBOOT_CHROME=true
-      # Keep Chrome alive between calls
-      - KEEP_ALIVE=true
-      # Expose the built‐in debugger UI
-      - ENABLE_DEBUGGER=true
-      # Serve static assets (UI, CSS, JS, etc.)
-      - ENABLE_STATIC=true
-      # Tell Browserless where “/static” really lives inside the container
-      - STATIC_PATH=/usr/src/app/static
-      # Auto‐exit if healthcheck fails
       - EXIT_ON_HEALTH_FAILURE=true
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.browserless.rule=Host(`${BL_HOST}`)"
-      - "traefik.http.routers.browserless.entrypoints=websecure"
-      - "traefik.http.routers.browserless.tls=true"
-      - "traefik.http.routers.browserless.tls.certresolver=letsencrypt"
-      # Tell Traefik that Browserless is listening on port 3000 internally
-      - "traefik.http.services.browserless.loadbalancer.server.port=3000"
+      - DEBUG=-*
+    # ✱ Internal-only port – Traefik will proxy to it
     expose:
       - "3000"
+    labels:
+      - "traefik.enable=true"
+
+      # ───── Router: HTTPS/WSS to /chrome, must carry exact token ─────
+      - "traefik.http.routers.chrome.rule=Host(`${BL_HOST}`) && PathPrefix(`/chrome`)"
+      - "traefik.http.routers.chrome.entrypoints=websecure"
+      - "traefik.http.routers.chrome.tls=true"
+      - "traefik.http.routers.chrome.tls.certresolver=letsencrypt"
+
+      # service → container:3000
+      - "traefik.http.services.chrome.loadbalancer.server.port=3000"
     healthcheck:
       test:
         [
@@ -93,10 +95,8 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
-    networks:
-      - webproxy
+    networks: [webproxy]
 
-# Volumes (optional; here for clarity—note that these are not “named volumes” in this example)
 volumes:
   letsencrypt:
     driver: local
