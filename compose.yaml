@@ -24,7 +24,7 @@ services:
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
 
-      # ACME (Let’s Encrypt) – TLS-ALPN
+      # ACME (Let's Encrypt) – TLS-ALPN
       - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
@@ -52,27 +52,33 @@ services:
     networks: [webproxy]
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Browserless (v2 latest) – exposed only via Traefik router above
+  # Custom Browserless with Orbita + GoLogin Integration
   # ────────────────────────────────────────────────────────────────────────────
   browserless:
-    image: ghcr.io/browserless/chrome:latest
+    build:
+      context: ./orbita
+      dockerfile: Dockerfile
     env_file:
-      - .env # BL_TOKEN loaded here
+      - .env # BL_TOKEN and GOLOGIN_TOKEN loaded here
     depends_on: [proxy]
     environment:
-      # Required auth
+      # Browserless auth
       - TOKEN=${BL_TOKEN}
-      # Typical tuning (safe defaults – tweak if needed)
+      # GoLogin credentials
+      - GOLOGIN_TOKEN=${GOLOGIN_TOKEN}
+      - GOLOGIN_WORKSPACE=${GOLOGIN_WORKSPACE:-default}
+      # Browserless configuration
       - CONCURRENT=4
       - QUEUED=100
       - TIMEOUT=300000
       - IGNORE_HTTPS_ERRORS=true
-      - LAUNCH_ARGS=--disable-dev-shm-usage --no-sandbox
       - EXIT_ON_HEALTH_FAILURE=true
       - DEBUG=-*
-    # ✱ Internal-only port – Traefik will proxy to it
+      # Custom Orbita path
+      - ORBITA_PATH=/opt/gologin/orbita-browser/chrome
+    # ✱ Internal-only port – Traefik will proxy to browserless
     expose:
-      - "3000"
+      - "4000" # Browserless Orbita Wrapper with GoLogin integration
     labels:
       - "traefik.enable=true"
 
@@ -82,13 +88,13 @@ services:
       - "traefik.http.routers.chrome.tls=true"
       - "traefik.http.routers.chrome.tls.certresolver=letsencrypt"
 
-      # service → container:3000
-      - "traefik.http.services.chrome.loadbalancer.server.port=3000"
+      # service → container:4000
+      - "traefik.http.services.chrome.loadbalancer.server.port=4000"
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          'curl -fs "http://localhost:3000/json/version?token=${BL_TOKEN}" || exit 1',
+          'curl -fs "http://localhost:4000/json/version?token=${BL_TOKEN}" || exit 1',
         ]
       interval: 30s
       timeout: 10s
