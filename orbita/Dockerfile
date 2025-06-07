@@ -1,5 +1,5 @@
-# Start from the official browserless base image
-FROM browserless/chrome:latest
+# Start from the official browserless base image  
+FROM ghcr.io/browserless/chromium:latest
 
 USER root
 
@@ -35,12 +35,17 @@ RUN chown -R blessuser:blessuser /opt/gologin /opt/browserless-orbita
 # Switch to browserless user
 USER blessuser
 
-# Environment variables
+# Environment variables for browserless
+ENV CHROME_EXECUTABLE="/opt/gologin/orbita-browser/chrome"
 ENV ORBITA_PATH="/opt/gologin/orbita-browser/chrome"
 ENV NODE_ENV="production"
 
-# Expose port
+# Expose port for the wrapper
 EXPOSE 4000
 
-# Run the wrapper directly
-CMD ["node", "/opt/browserless-orbita/browserless-orbita-wrapper.js"]
+# Copy and set up startup script
+WORKDIR /opt/browserless-orbita
+RUN chmod +x start.sh
+
+# Run the startup script
+CMD ["/bin/bash", "/opt/browserless-orbita/start.sh"]

@@ -3,13 +3,12 @@
 /**
  * Browserless Orbita Wrapper
  *
- * This wrapper replaces the standard browserless Chrome with Orbita browser,
+ * This wrapper integrates with the existing browserless Chrome instance,
  * automatically fetching fresh fingerprints from GoLogin for each browser session.
  */
 
 const express = require("express");
 const { createProxyMiddleware } = require("http-proxy-middleware");
-const { spawn } = require("child_process");
 const axios = require("axios");
 const path = require("path");
 const fs = require("fs");
@@ -18,9 +17,8 @@ const { v4: uuidv4 } = require("uuid");
 class BrowserlessOrbitaWrapper {
   constructor() {
     this.app = express();
-    this.browserlessProcess = null;
     this.port = 4000;
-    this.browserlessPort = 3000; // Internal browserless port (default)
+    this.browserlessPort = 3000; // Port where browserless is already running
     this.orbitaPath =
       process.env.ORBITA_PATH || "/opt/gologin/orbita-browser/chrome";
     this.activeFingerprints = new Map(); // Store active fingerprints
@@ -36,19 +34,34 @@ class BrowserlessOrbitaWrapper {
       throw new Error("GOLOGIN_TOKEN environment variable is required");
     }
 
-    // Browserless configuration
-    this.browserlessConfig = {
-      TOKEN: process.env.TOKEN || process.env.BL_TOKEN,
-      CONCURRENT: process.env.CONCURRENT || 4,
-      QUEUED: process.env.QUEUED || 100,
-      TIMEOUT: process.env.TIMEOUT || 300000,
-      IGNORE_HTTPS_ERRORS: process.env.IGNORE_HTTPS_ERRORS || "true",
-      EXIT_ON_HEALTH_FAILURE: process.env.EXIT_ON_HEALTH_FAILURE || "true",
-      DEBUG: process.env.DEBUG || "-*",
-    };
-
     this.setupMiddleware();
-    this.startBrowserless();
+    this.waitForBrowserless();
+  }
+
+  async waitForBrowserless() {
+    console.log("Waiting for browserless to be ready...");
+    const maxRetries = 30;
+    let retries = 0;
+
+    while (retries < maxRetries) {
+      try {
+        await axios.get(
+          `http://localhost:${this.browserlessPort}/json/version`,
+          { timeout: 5000 }
+        );
+        console.log("Browserless is ready!");
+        break;
+      } catch (error) {
+        retries++;
+        console.log(`Waiting for browserless... (${retries}/${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+
+    if (retries === maxRetries) {
+      console.error("Browserless failed to start within expected time");
+      process.exit(1);
+    }
   }
 
   setupMiddleware() {
@@ -65,7 +78,7 @@ class BrowserlessOrbitaWrapper {
     this.app.use(
       "/",
       createProxyMiddleware({
-        target: `http://localhost:${this.browserlessPort}`, // Internal browserless port
+        target: `http://localhost:${this.browserlessPort}`,
         changeOrigin: true,
         ws: true,
         logLevel: "warn",
@@ -184,76 +197,6 @@ class BrowserlessOrbitaWrapper {
     }
   }
 
-  startBrowserless() {
-    console.log("Starting browserless with Orbita integration...");
-
-    // Create a custom browserless launch script
-    const launchScript = this.createOrbitaLaunchScript();
-
-    // Start browserless with custom configuration (let it use default port 3000)
-    const browserlessArgs = [
-      "/usr/src/app/build/index.js",
-      "--debug=-*",
-      `--concurrent=${this.browserlessConfig.CONCURRENT}`,
-      `--queued=${this.browserlessConfig.QUEUED}`,
-      `--timeout=${this.browserlessConfig.TIMEOUT}`,
-      `--ignore-https-errors=${this.browserlessConfig.IGNORE_HTTPS_ERRORS}`,
-      `--exit-on-health-failure=${this.browserlessConfig.EXIT_ON_HEALTH_FAILURE}`,
-      `--chrome-executable=${launchScript}`,
-      `--token=${this.browserlessConfig.TOKEN}`,
-    ];
-
-    const env = {
-      ...process.env,
-      DEBUG: this.browserlessConfig.DEBUG,
-      ORBITA_EXECUTABLE: this.orbitaPath,
-    };
-
-    this.browserlessProcess = spawn("node", browserlessArgs, {
-      stdio: ["inherit", "pipe", "pipe"],
-      env: env,
-    });
-
-    this.browserlessProcess.stdout.on("data", (data) => {
-      console.log(`[Browserless]: ${data.toString().trim()}`);
-    });
-
-    this.browserlessProcess.stderr.on("data", (data) => {
-      console.error(`[Browserless Error]: ${data.toString().trim()}`);
-    });
-
-    this.browserlessProcess.on("close", (code) => {
-      console.log(`Browserless process exited with code ${code}`);
-      if (code !== 0) {
-        setTimeout(() => this.startBrowserless(), 5000); // Restart after 5 seconds
-      }
-    });
-
-    this.browserlessProcess.on("error", (error) => {
-      console.error("Failed to start browserless process:", error);
-    });
-  }
-
-  createOrbitaLaunchScript() {
-    const scriptPath = "/tmp/orbita-launch.sh";
-    const scriptContent = `#!/bin/bash
-
-# Orbita Launch Script with GoLogin Fingerprint Integration
-# This script is called by browserless to launch Orbita instead of Chrome
-
-ORBITA_EXECUTABLE="${this.orbitaPath}"
-
-# Default Orbita arguments for browserless compatibility
-ORBITA_ARGS="--no-sandbox --disable-dev-shm-usage --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-features=TranslateUI --disable-ipc-flooding-protection --enable-features=NetworkService,NetworkServiceLogging --disable-background-networking --enable-features=VizDisplayCompositor --remote-debugging-port=0 --headless=new"
-
-# Launch Orbita with arguments
-exec "$ORBITA_EXECUTABLE" $ORBITA_ARGS "$@"
-`;
-
-    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
-    return scriptPath;
-  }
-
   start() {
     this.app.listen(this.port, () => {
       console.log(`Browserless Orbita Wrapper running on port ${this.port}`);
@@ -268,9 +211,6 @@ exec "$ORBITA_EXECUTABLE" $ORBITA_ARGS "$@"
 
   shutdown() {
     console.log("Shutting down Browserless Orbita Wrapper...");
-    if (this.browserlessProcess) {
-      this.browserlessProcess.kill("SIGTERM");
-    }
     process.exit(0);
   }
 }
