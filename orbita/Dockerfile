@@ -29,23 +29,20 @@ RUN npm install
 # Copy application scripts
 COPY scripts/ ./
 
-# Set proper ownership
-RUN chown -R blessuser:blessuser /opt/gologin /opt/browserless-orbita
+# Make launcher executable and set ownership
+RUN chmod +x /opt/browserless-orbita/orbita-launcher.js && \
+    chown -R blessuser:blessuser /opt/gologin /opt/browserless-orbita
 
 # Switch to browserless user
 USER blessuser
 
 # Environment variables for browserless
-ENV CHROME_EXECUTABLE="/opt/gologin/orbita-browser/chrome"
+ENV CHROME_EXECUTABLE="/opt/browserless-orbita/orbita-launcher.js"
 ENV ORBITA_PATH="/opt/gologin/orbita-browser/chrome"
 ENV NODE_ENV="production"
 
-# Expose port for the wrapper
-EXPOSE 4000
+# Expose port for browserless
+EXPOSE 3000
 
-# Copy and set up startup script
-WORKDIR /opt/browserless-orbita
-RUN chmod +x start.sh
-
-# Run the startup script
-CMD ["/bin/bash", "/opt/browserless-orbita/start.sh"]
+# Restore original working directory for browserless
+WORKDIR /usr/src/app

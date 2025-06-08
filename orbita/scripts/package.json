@@ -1,19 +1,14 @@
 {
     "name": "browserless-orbita-integration",
     "version": "2.0.0",
-    "description": "Complete Orbita browser integration with GoLogin fingerprints for browserless",
-    "main": "browserless-orbita-wrapper.js",
+    "description": "Orbita browser launcher with GoLogin fingerprint API for browserless",
+    "main": "orbita-launcher.js",
     "dependencies": {
-      "gologin": "^2.0.0",
       "axios": "^1.6.0",
-      "express": "^4.18.0",
-      "uuid": "^9.0.0",
-          "puppeteer-core": "^21.0.0",
-    "ws": "^8.14.0",
-    "http-proxy-middleware": "^2.0.6"
+      "uuid": "^9.0.0"
     },
     "scripts": {
-      "start": "node browserless-orbita-wrapper.js"
+      "start": "node orbita-launcher.js"
     },
     "engines": {
       "node": ">=16.0.0"
